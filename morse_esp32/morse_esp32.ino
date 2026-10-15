@@ -4,7 +4,7 @@
  * ==========================================================================
  *
  *  Board : AZ-Delivery ESP32 DevKit V4 (ESP32-WROOM-32, ESP32-D0WD-V3, 4 MB Flash)
- *  Display: ST7789 240x320 (Einstellungen in display_config.h)
+ *  Display: 1,69" ST7789V2, 240x280 (Pins/Einstellungen aus PlatformIO-Projekt "Test ST7789")
  *  Arduino-Board-Einstellung: "ESP32 Dev Module"  (FQBN esp32:esp32:esp32)
  *
  *  Funktionen
@@ -62,6 +62,8 @@
  *    - Adafruit ILI9341                        (für ILI9341)
  *    - Adafruit ST7735 and ST7789 Library      (für ST7735 / ST7789)
  *    - Adafruit BusIO (wird automatisch mitinstalliert)
+ *    - ESP Async WebServer + Async TCP (ESP32Async, v45 WLAN/Webseite)
+ *  WLAN: wifi_config.h im Sketch-Ordner (SSID/Passwort, nicht weitergeben)
  */
 
 #include <SPI.h>
@@ -71,6 +73,48 @@
 #include "hal/dac_ll.h"
 #include <algorithm>
 #include <Adafruit_GFX.h>
+
+// ==========================================================================
+//  v45 WLAN + Webseite (Schritt 1: Live-Anzeige + Befehlszeile)
+//  Zugangsdaten in wifi_config.h (Sketch-Ordner, NICHT weitergeben/ins Repo).
+//  Fehlt die Datei oder steht dort noch "HIER_PASSWORT", läuft der Decoder
+//  ohne WLAN; Zugangsdaten gehen dann auch per /wifi ssid ... / /wifi pass ...
+// ==========================================================================
+#include <WiFi.h>
+#include <ESPmDNS.h>
+#include <AsyncTCP.h>
+#include <ESPAsyncWebServer.h>
+#if __has_include("wifi_config.h")
+  #include "wifi_config.h"
+#endif
+#ifndef WIFI_SSID
+  #define WIFI_SSID ""
+#endif
+#ifndef WIFI_PASS
+  #define WIFI_PASS ""
+#endif
+#ifndef WIFI_HOSTNAME
+  #define WIFI_HOSTNAME "morsedecoder"
+#endif
+
+// Serielle Ausgabe 1:1 durchreichen und für Web-Befehle zusätzlich mitschreiben
+class SerTee : public Stream {
+ public:
+  HardwareSerial &h; String *cap = nullptr;
+  explicit SerTee(HardwareSerial &s) : h(s) {}
+  void begin(unsigned long b) { h.begin(b); }
+  size_t write(uint8_t c) override { if (cap && cap->length() < 3000) *cap += (char)c; return h.write(c); }
+  size_t write(const uint8_t *b, size_t n) override { if (cap) for (size_t i = 0; i < n && cap->length() < 3000; i++) *cap += (char)b[i]; return h.write(b, n); }
+  int available() override { return h.available(); }
+  int read() override { return h.read(); }
+  int peek() override { return h.peek(); }
+  void flush() override { h.flush(); }
+};
+SerTee SerialTee(Serial0);
+#undef Serial
+#define Serial SerialTee
+// v45 Jitter-/Lastmessung Audio-Task (/stat #J, /wifi status)
+volatile uint32_t jItMaxUs = 0, jGap20 = 0, jBackMax = 0, jOvf = 0, jIt = 0;
 
 // ==========================================================================
 //  1)+2) DISPLAY-EINSTELLUNGEN  -> stehen in display_config.h (Sketch-Ordner)
@@ -492,14 +536,15 @@ int   txWpm  = 18;                    // Geber-Tempo
 //  (SPI, langsam) nur in loop() auf Core 1. Aufrufe vom Audio-Core landen in
 //  einer Warteschlange und werden in loop() abgearbeitet.
 // --------------------------------------------------------------------------
-#define AUDIO_CORE 0
+#define AUDIO_CORE 1            // v45: Audio auf Core 1 (Core 0 = WLAN/Netz), Prioritaet ueber loop()
+TaskHandle_t audioTaskH = nullptr;
 QueueHandle_t uiQ = nullptr;
 int mCur = -1;                 // Mehrkanal: aktuell dekodierter Kanal (-1 = Einkanal)
 extern bool multiOn; extern int mFreq[];
 void mAppendNow(int i, char c); void mHeadNow(int i); void mLayout(); void mClear();
 SemaphoreHandle_t audioMtx = nullptr;
 void dictReplaceNow(const char *w, int rawLen); void drawHeaderNow(); void drawSymbolsNow(const char *sym); void appendCharNow(char c, uint16_t color); void showSymNow(int k, uint16_t color);
-static bool uiDefer() { return uiQ && xPortGetCoreID() == AUDIO_CORE; }
+static bool uiDefer() { return uiQ && audioTaskH && xTaskGetCurrentTaskHandle() == audioTaskH; }   // v45: nach Task statt Core
 static void uiPush(UiOp &o) { xQueueSend(uiQ, &o, 0); }   // voll -> verwerfen statt blockieren
 void drawHeader() { if (mCur >= 0) { UiOp o = {0}; o.type = 5; o.k = mCur; uiPush(o); return; } if (uiDefer()) { UiOp o = {0}; o.type = 0; uiPush(o); } else drawHeaderNow(); }
 void drawSymbols(const char *sym) { if (mCur >= 0) return; if (uiDefer()) { UiOp o = {0}; o.type = 1; strncpy(o.sym, sym, 9); uiPush(o); } else drawSymbolsNow(sym); }
@@ -553,13 +598,15 @@ void drawLvlWarnNow() {
   tft.setTextSize(TXT_SIZE);
 }
 extern uint8_t handMode; extern int8_t handIs; bool isHand();
+extern uint32_t wifiIpShowUntil;
 void drawHeaderNow() {
   if (lvlWarn && !multiOn) { drawLvlWarnNow(); return; }
   tft.fillRect(0, 0, W, headH, C_HEAD);
   tft.setTextSize(1);
   tft.setTextColor(C_TEXT, C_HEAD);
   tft.setCursor(MARGIN_X, MARGIN_Y + (headH - MARGIN_Y - 8) / 2);
-  tft.print("MORSE ESP32");
+  if (wifiIpShowUntil) { tft.print("IP "); tft.print(WiFi.localIP().toString()); }   // v45: IP kurz nach dem Verbinden
+  else tft.print("MORSE ESP32");
   char buf[32];
   if (multiOn) snprintf(buf, sizeof(buf), "MULTI 4 K");
   else {
@@ -644,11 +691,21 @@ int16_t stDb(float m, int16_t h) { if (m <= 1) return 0; float v = (20.0f * log1
 struct LabItem { uint32_t t0, t1; char s[7]; };
 volatile LabItem labR[LAB_N]; volatile uint32_t labHead = 0;
 GFXcanvas16 *chCv = nullptr;
+// v45 Web-Ereignisse (Audio-Task schreibt, loop() liest und verschickt)
+struct WebEv { uint8_t type; uint32_t a, b; char s[7]; };   // 1 = Taste an, 2 = Taste aus, 3 = Zeichen
+#define WEV_N 128
+volatile WebEv wevR[WEV_N]; volatile uint32_t wevHead = 0;
+void webEv(uint8_t ty, uint32_t a, uint32_t b, const char *s) {
+  uint32_t h = wevHead; volatile WebEv &e = wevR[h % WEV_N];
+  e.type = ty; e.a = a; e.b = b; int i = 0; if (s) for (; i < 6 && s[i]; i++) e.s[i] = s[i]; e.s[i] = 0;
+  wevHead = h + 1;
+}
 void labPush(uint32_t t0, uint32_t t1, const char *s) {
   if (!s || !s[0] || s[0] == ' ') return;
   uint32_t h = labHead; volatile LabItem &e = labR[h % LAB_N];
   e.t0 = t0; e.t1 = t1 > t0 ? t1 : t0; int i = 0; for (; i < 6 && s[i]; i++) e.s[i] = s[i]; e.s[i] = 0;
   labHead = h + 1; tkDirty = true;
+  webEv(3, e.t0, e.t1, s);
 }
 void chrRowDraw(uint32_t cur) {
   if (!chCv || chrH <= 0) return;
@@ -813,7 +870,11 @@ void applyOrientation() {
 #endif
 }
 
+extern volatile bool tftReq;
 void setupDisplay() {
+  // v50: harter Reset mit Wartezeit, damit das ST7789 nach Einschalten sicher initialisiert
+  pinMode(PIN_TFT_RST, OUTPUT); digitalWrite(PIN_TFT_RST, HIGH); delay(5);
+  digitalWrite(PIN_TFT_RST, LOW); delay(20); digitalWrite(PIN_TFT_RST, HIGH); delay(150);
 #if PIN_TFT_BL >= 0
   pinMode(PIN_TFT_BL, OUTPUT);
   digitalWrite(PIN_TFT_BL, HIGH);         // Beleuchtung an
@@ -1417,6 +1478,7 @@ void audioSetup() {
   mSetup(fsMeasured);
 }
 
+static bool IRAM_ATTR adcOvfCb(adc_continuous_handle_t, const adc_continuous_evt_data_t *, void *) { jOvf++; return false; }
 bool audioBegin() {
   adc_continuous_handle_cfg_t hcfg = {};
   hcfg.max_store_buf_size = 16384;             // ~400 ms Reserve, falls loop() aufgehalten wird
@@ -1440,6 +1502,7 @@ bool audioBegin() {
   cfg.conv_mode      = ADC_CONV_SINGLE_UNIT_1;
   cfg.format         = ADC_DIGI_OUTPUT_FORMAT_TYPE1;
   if (adc_continuous_config(adcHandle, &cfg) != ESP_OK) return false;
+  { adc_continuous_evt_cbs_t cb = {}; cb.on_pool_ovf = adcOvfCb; adc_continuous_register_event_callbacks(adcHandle, &cb, nullptr); }   // v45
   if (adc_continuous_start(adcHandle) != ESP_OK) return false;
   fsT0 = millis();
   audioSetup();
@@ -1593,13 +1656,21 @@ void printAudioStatus(const char *tag) {
   printDecoderStatus();
 }
 
+// v47: Audio-Uhr aus dem Abtastwert-Zaehler (DMA-Takt). Flanken- und Pausenzeiten haengen
+// so nicht mehr davon ab, wann/wie lange der Audio-Task verarbeitet (WLAN/Netz-Unterbrechungen).
+// Die Uhr wird nur langsam an millis() nachgefuehrt (Drift der gemessenen Abtastrate) und
+// laeuft nie vor millis().
+double   aClkMs = -1;          // Zeit des zuletzt verarbeiteten Abtastwerts (ms)
+uint32_t aClkEnd = 0;          // dieselbe Zeit als uint32 (Decoder-"now")
+float    aClkMinLag = 1e9f; uint32_t aClkChkT = 0;
 // Alle vorliegenden ADC-Daten abholen und verarbeiten (aus loop())
 void audioLoop(uint32_t now) {
   if (!audioOk) return;
   static uint8_t buf[256];
   uint32_t len = 0;
-  aProcIdx = 0; aPendN = 0;
+  aProcIdx = 0; aPendN = 0; uint32_t rdTot = 0;
   while (adc_continuous_read(adcHandle, buf, sizeof(buf), &len, 0) == ESP_OK && len) {
+    rdTot += len;
     for (uint32_t i = 0; i + 1 < len; i += SOC_ADC_DIGI_RESULT_BYTES) {
       adc_digi_output_data_t *d = (adc_digi_output_data_t *)&buf[i];
       if (d->type1.channel != pat_channel) continue;
@@ -1637,16 +1708,32 @@ void audioLoop(uint32_t now) {
       if (barOn || afcOn) barSample(x);
     }
   }
+  if (rdTot > jBackMax) jBackMax = rdTot;   // v45: Rückstau in Bytes (2 Byte je Abtastwert)
+  { // v47 Audio-Uhr fortschreiben
+    uint32_t ms = millis();
+    if (aClkMs < 0) aClkMs = ms;
+    aClkMs += aProcIdx * 1000.0 / fsMeasured;
+    float lag = (float)((double)ms - aClkMs);
+    if (lag < 0) { aClkMs = ms; lag = 0; }                 // nie vor der echten Zeit
+    if (lag < aClkMinLag) aClkMinLag = lag;
+    if (lag > 1000) { aClkMs = ms; aClkMinLag = 0; }       // Ueberlauf/Langstillstand: neu ansetzen
+    if (ms - aClkChkT >= 1000) {                            // 1x/s: Minimal-Verzug langsam auf ~3 ms ziehen
+      aClkChkT = ms;
+      if (aClkMinLag < 1e8f && aClkMinLag > 4.0f) aClkMs += 0.5 * (aClkMinLag - 3.0f);
+      aClkMinLag = 1e9f;
+    }
+    aClkEnd = (uint32_t)(int64_t)aClkMs;
+  }
   // Flanken dieses Aufrufs mit Zeitstempel in die Warteschlange: der letzte
   // gelesene Abtastwert entspricht ungefähr "jetzt"
   for (int i = 0; i < aPendN; i++) {
     uint32_t back = (uint32_t)(((int32_t)aProcIdx - aPendIdx[i]) * 1000.0f / fsMeasured);
     int nh = (aEdgeHead + 1) % AEDGE_N;
     if (nh == aEdgeTail) break;                    // voll (sollte nicht vorkommen)
-    aEdge[aEdgeHead].t = now - back; aEdge[aEdgeHead].on = aPendOn[i]; aEdgeHead = nh;
+    aEdge[aEdgeHead].t = aClkEnd - back;   /* v47: Abtast-Uhr */ aEdge[aEdgeHead].on = aPendOn[i]; aEdgeHead = nh;
   }
   aPendN = 0;
-  if (multiOn) mFlushPend(now, (int32_t)aProcIdx, fsMeasured);
+  if (multiOn) mFlushPend(aClkEnd, (int32_t)aProcIdx, fsMeasured);   // v47: Abtast-Uhr
   // tatsächliche Abtastrate messen (alle 2 s) und Filter anpassen
   // Abtastrate kumulativ seit Start/letztem Flush messen: Daten, die noch im
   // DMA-Puffer liegen (loop() kurz aufgehalten), verfälschen so nur minimal.
@@ -2281,6 +2368,7 @@ static uint32_t keyDownT = 0;
 void keyTransition(bool down, uint32_t t, bool phys) {
   keyBtn.stable = down; keyBtn.since = t;
   if (elemOut) { if (down) Serial.printf("#K1,%u\n", t); else Serial.printf("#K0,%u,%u\n", t, t - keyDownT); }
+  webEv(down ? 1 : 2, t, t - keyDownT, nullptr);
   if (down) keyDownT = t;
   if (down) {                            // gedrückt / Ton erkannt
     if (phys || AUDIO_SIDETONE) signalOn();
@@ -2669,8 +2757,8 @@ void printHelp() {
   Serial.println(F("/afc on|off|re  Frequenznachführung ±100 Hz um /freq (re = neu einrasten)"));
   Serial.println(F("/audio   Audio-Pegel-Debug an/aus"));
   Serial.println(F("/src X   Quelle: key | audio | both"));
-  Serial.println(F("/stat    Audio-Status einmal ausgeben"));
-  Serial.println(F("/elem on|off  Element-Ausgabe mit ESP-Zeit: #K1,t / #K0,t,dauer / #Ct,zeichen (Standard aus, fuer externe Auswertung)"));
+  Serial.println(F("/stat    Audio-Status einmal ausgeben  (/stat reset: Jitter-/Ueberlaufzaehler auf 0)"));
+  Serial.println(F("/elem on|off  Element-Ausgabe mit ESP-Zeit: #K1,t / #K0,t,dauer / #Ct,zeichen (Standard aus, fuer Mitschnitt)"));
   Serial.println(F("/ch on|off   CH beim Geben als ---- zusammenfassen (Standard aus: C H)"));
   Serial.println(F("/bar on|off  Bargraph-Abstimmanzeige (Peak-Frequenz auch in /audio: pk=, dpk=)"));
   Serial.println(F("/multi on|off  Mehrkanal-Modus: 4 Toene gleichzeitig dekodieren (Standard aus)"));
@@ -2691,11 +2779,14 @@ void printHelp() {
   Serial.println(F("/thrdecay <n>  Schwelle faellt mit n Punktlaengen Zeitkonstante (Std. 3, 0 = alt)"));
   Serial.println(F("/wbrej on|off|<dB>  Breitband-Stoerer (Klicks) unterdruecken, Ton muss <dB> ueber Nachbarn (Std. an, 6)"));
   Serial.println(F("/scope on|off   Streifen Pegel+Elemente (= /ticker)"));
+  Serial.println(F("/wifi on|off|status  WLAN + Webseite http://morsedecoder.local (Standard an)"));
+  Serial.println(F("/wifi ssid NAME | /wifi pass PASSWORT  WLAN-Zugang speichern (NVS, ueberschreibt wifi_config.h)"));
   Serial.println(F("/help    diese Hilfe"));
   Serial.println(F("Morsetaste GPIO27, Funktionstaste GPIO33 (kurz=löschen, lang=Echo), Audio GPIO34\n"));
 }
 
 // Serielle Eingabe zeilenweise lesen und auswerten
+void execCmd(String line);   // v45
 String inLine;
 
 void serialLoop() {
@@ -2712,8 +2803,17 @@ void serialLoop() {
     { static String lastCmd; static uint32_t lastCmdT = 0; uint32_t n = millis();
       if (line[0] == '/' && line == lastCmd && n - lastCmdT < 1000) continue;
       lastCmd = line; lastCmdT = n; }
+    execCmd(line);
+  }
+}
 
-    if (line.startsWith("/wpm")) {
+// v45: Befehl ausfuehren (seriell und Webseite)
+void wifiCmd(String a); void printJitter();
+void execCmd(String line) {
+  {
+    if (line.startsWith("/wifi")) {
+      wifiCmd(line.substring(5));
+    } else if (line.startsWith("/wpm")) {
       int v = line.substring(4).toInt();
       if (v >= MIN_WPM && v <= MAX_WPM) { txWpm = v; drawHeader(); prefs.putInt("wpm", v); }
       Serial.printf("Geber-Tempo: %d WPM\n", txWpm);
@@ -2856,7 +2956,7 @@ void serialLoop() {
       if (a.length()) { afcSwMs = constrain(a.toInt(), 300, 10000); prefs.putUInt("afcsw", afcSwMs); }
       Serial.printf("\n[AFC-Wechsel erst nach %u ms Stille]\n", (unsigned)afcSwMs);
     } else if (line.startsWith("/afc")) {
-      if (line.endsWith("re")) { afcOn = true; afcLocked = false; decHz = afcHz = afcCenter; audioFreq = (int)afcCenter; audioSetup(); afcCnt = 0; lastToneMs = 0; Serial.println("AFC neu einrasten"); continue; }
+      if (line.endsWith("re")) { afcOn = true; afcLocked = false; decHz = afcHz = afcCenter; audioFreq = (int)afcCenter; audioSetup(); afcCnt = 0; lastToneMs = 0; Serial.println("AFC neu einrasten"); return; }
       if (line.endsWith("on") || line.endsWith("off")) { afcOn = !line.endsWith("off"); prefs.putBool("afc", afcOn); }
       if (!afcOn) afcLocked = false;
       Serial.printf("AFC %s, %.1f Hz\n", afcOn ? "an" : "aus", decHz);
@@ -2869,9 +2969,14 @@ void serialLoop() {
       String a = line.substring(5); a.trim();
       elemOut = a == "on" ? true : a == "off" ? false : !elemOut;
       Serial.printf("\nElem-Ausgabe %s\n", elemOut ? "an" : "aus");
+    } else if (line == "/tft") {   // v50: Display neu initialisieren
+      tftReq = true; Serial.println(F("[Display wird neu initialisiert]"));
+    } else if (line == "/stat reset") {   // v46
+      jItMaxUs = 0; jGap20 = 0; jBackMax = 0; jIt = 0; jOvf = 0; Serial.println(F("\n[Jitter-/Ueberlaufzaehler zurueckgesetzt]"));
     } else if (line == "/stat") {
       printAudioStatus("#S");
       printMultiStatus();
+      printJitter();
     } else if (line.startsWith("/src")) {
       String m = line.substring(4); m.trim();
       if (m == "key") keySource = SRC_KEY;
@@ -2920,6 +3025,256 @@ void funcButtonLoop(uint32_t now) {
   }
 }
 
+
+// ==========================================================================
+//  v45 WLAN + Webserver (Port 80, WebSocket /ws). Netzwerk läuft auf Core 0
+//  (WLAN-Treiber, lwIP, AsyncTCP), Audio/Decoder als Task auf Core 1 mit
+//  höherer Priorität als loop(). loop() verschickt nur, was Audio-Task und
+//  Display ohnehin erzeugen; der Decoder selbst bleibt unverändert.
+//  Meldungen an den Browser (Text, eine Zeile je Meldung):
+//   S,...  Status ~5/s     B,...  Spektrum ~5/s     L<c0>:<..> Pegel/Element-Spalten (4 ms)
+//   K1,t / K0,t,dauer      C,t0,t1,zeichen          T<text>  Textbereich   R<antwort>
+// ==========================================================================
+bool     wifiOn = true;             // NVS "wifi"
+String   wifiSsid, wifiPass;        // aktiv (NVS überschreibt wifi_config.h)
+bool     wifiUp = false, wifiSrvUp = false, wifiGotIp = false;
+uint32_t wifiTryT = 0, wifiIpShowUntil = 0;
+AsyncWebServer webSrv(80);
+AsyncWebSocket webWs("/ws");
+struct WebCmd { uint32_t client; char line[200]; };
+QueueHandle_t webCmdQ = nullptr;
+uint32_t wevTail = 0, webTxtSum = 0xFFFFFFFF, webStCol = 0;
+
+#include "web_page.h"   // v50 (Webseite wie v49)
+
+bool wifiCredsOk() { return wifiSsid.length() > 0 && wifiPass.length() > 0 && wifiPass != "HIER_PASSWORT"; }
+
+void webOnWs(AsyncWebSocket *s, AsyncWebSocketClient *c, AwsEventType t, void *arg, uint8_t *data, size_t len) {
+  if (t == WS_EVT_CONNECT) { webTxtSum = 0xFFFFFFFF; return; }   // neuer Browser -> Text sofort komplett
+  if (t != WS_EVT_DATA) return;
+  AwsFrameInfo *fi = (AwsFrameInfo *)arg;
+  if (!fi->final || fi->index != 0 || fi->len != len || fi->opcode != WS_TEXT) return;
+  WebCmd w; w.client = c->id(); size_t n = len < sizeof(w.line) - 1 ? len : sizeof(w.line) - 1;
+  memcpy(w.line, data, n); w.line[n] = 0;
+  if (webCmdQ) xQueueSend(webCmdQ, &w, 0);
+}
+
+// v46: alle WLAN-Aktionen (begin/disconnect/mode) und WLAN-NVS-Schreibvorgaenge laufen in
+// wifiTask auf Core 0. Befehle setzen nur Auftraege (wifiReq), damit loop() die Audio-Sperre
+// nie waehrend blockierender WLAN-/Flash-Aufrufe haelt (v45: ~4 s Audio-Stillstand).
+volatile uint8_t wifiReq = 0;      // Bit0 start, Bit1 stop, Bit2 NVS ssid, Bit3 NVS pass, Bit4 NVS wifi-flag
+volatile uint8_t wifiReason = 0;   // letzter Trennungsgrund (WiFi-Event)
+volatile bool wifiEvConn = false;
+portMUX_TYPE wifiMux = portMUX_INITIALIZER_UNLOCKED;
+String wifiNewSsid, wifiNewPass;
+const char *wifiReasonTxt(uint8_t r) {
+  switch (r) {
+    case 0: return "";
+    case WIFI_REASON_NO_AP_FOUND: return "SSID nicht gefunden (NO_AP_FOUND, 2,4 GHz?)";
+    case WIFI_REASON_AUTH_FAIL: return "Anmeldung fehlgeschlagen (AUTH_FAIL)";
+    case WIFI_REASON_4WAY_HANDSHAKE_TIMEOUT: return "Passwort falsch? (4WAY_HANDSHAKE_TIMEOUT)";
+    case WIFI_REASON_HANDSHAKE_TIMEOUT: return "Passwort falsch? (HANDSHAKE_TIMEOUT)";
+    case WIFI_REASON_AUTH_EXPIRE: return "AUTH_EXPIRE";
+    case WIFI_REASON_ASSOC_FAIL: return "ASSOC_FAIL";
+    case WIFI_REASON_BEACON_TIMEOUT: return "BEACON_TIMEOUT (Signal schwach)";
+    case WIFI_REASON_CONNECTION_FAIL: return "CONNECTION_FAIL";
+    default: return "anderer Grund";
+  }
+}
+void wifiEvent(arduino_event_id_t ev, arduino_event_info_t info) {
+  if (ev == ARDUINO_EVENT_WIFI_STA_DISCONNECTED) { wifiReason = info.wifi_sta_disconnected.reason; wifiEvConn = false; }
+  else if (ev == ARDUINO_EVENT_WIFI_STA_GOT_IP) { wifiReason = 0; wifiEvConn = true; }
+}
+void wifiStart();
+void wifiStop();
+void wifiTask(void *) {
+  while (millis() < 4000) vTaskDelay(pdMS_TO_TICKS(100));   // v50: WLAN erst nach fertigem Display (Stromspitze)
+  for (;;) {
+    uint8_t rq; String ss, pw;
+    portENTER_CRITICAL(&wifiMux); rq = wifiReq; wifiReq = 0; portEXIT_CRITICAL(&wifiMux);
+    if (rq & 0x0C) { ss = wifiNewSsid; pw = wifiNewPass; }
+    if (rq & 4) prefs.putString("wssid", ss);
+    if (rq & 8) prefs.putString("wpass", pw);
+    if (rq & 16) prefs.putBool("wifi", wifiOn);
+    if (rq & 4) wifiSsid = ss;
+    if (rq & 8) wifiPass = pw;
+    if (rq & 2) wifiStop();
+    if (rq & 1) { wifiReason = 0; wifiStart(); }
+    uint32_t now = millis();
+    if (wifiUp && !wifiEvConn && now - wifiTryT > 20000) { wifiTryT = now; WiFi.disconnect(); WiFi.begin(wifiSsid.c_str(), wifiPass.c_str()); }
+    vTaskDelay(pdMS_TO_TICKS(50));
+  }
+}
+void wifiPost(uint8_t bits) { portENTER_CRITICAL(&wifiMux); wifiReq |= bits; portEXIT_CRITICAL(&wifiMux); }
+
+void wifiStart() {
+  if (!wifiCredsOk()) {
+    Serial.println(F("\n[WLAN: kein Passwort hinterlegt - in wifi_config.h eintragen oder /wifi pass <Passwort>]"));
+    return;
+  }
+  WiFi.persistent(false);
+  WiFi.mode(WIFI_STA);
+  WiFi.setHostname(WIFI_HOSTNAME);
+  WiFi.setSleep(false);
+  WiFi.setAutoReconnect(true);
+  WiFi.setTxPower(WIFI_POWER_15dBm);   // v50: weniger Stromspitzen (Display-Versorgung)
+  WiFi.begin(wifiSsid.c_str(), wifiPass.c_str());
+  wifiTryT = millis(); wifiUp = true;
+  if (!wifiSrvUp) {
+    webWs.onEvent(webOnWs);
+    webSrv.addHandler(&webWs);
+    webSrv.on("/", HTTP_GET, [](AsyncWebServerRequest *r) { AsyncWebServerResponse *rs = r->beginResponse(200, "text/html; charset=utf-8", WEB_PAGE_GZ, WEB_PAGE_GZ_LEN); rs->addHeader("Content-Encoding", "gzip"); rs->addHeader("Cache-Control", "no-cache"); r->send(rs); });
+    webSrv.onNotFound([](AsyncWebServerRequest *r) { r->send(404, "text/plain", "nicht gefunden"); });
+    webSrv.begin(); wifiSrvUp = true;
+  }
+  Serial.printf("\n[WLAN: verbinde mit \"%s\" ...]\n", wifiSsid.c_str());
+}
+void wifiStop() {
+  if (!wifiUp) return;
+  webWs.closeAll();
+  MDNS.end();
+  WiFi.disconnect(true); WiFi.mode(WIFI_OFF);
+  wifiUp = false; wifiGotIp = false;
+}
+void wifiSetup() {
+  wifiOn = prefs.getBool("wifi", true);
+  wifiSsid = prefs.isKey("wssid") ? prefs.getString("wssid", WIFI_SSID) : String(WIFI_SSID);
+  wifiPass = prefs.isKey("wpass") ? prefs.getString("wpass", WIFI_PASS) : String(WIFI_PASS);
+  if (!wifiPass.length() || wifiPass == "HIER_PASSWORT") wifiPass = WIFI_PASS;   // NVS leer -> Datei
+  webCmdQ = xQueueCreate(4, sizeof(WebCmd));
+  WiFi.onEvent(wifiEvent);
+  xTaskCreatePinnedToCore(wifiTask, "wifi", 6144, nullptr, 1, nullptr, 0);   // v46: Core 0
+  if (wifiOn) wifiPost(1);
+}
+// Jitter-/Lastmessung Audio-Task (für /stat #J und /wifi status)
+void printJitter() {
+  Serial.printf("#J audioCore=%d itMax=%uus gaps>20ms=%u backlogMax=%.1fms adcOvf=%u iter=%u wifi=%d\n", 1,
+                (unsigned)jItMaxUs, (unsigned)jGap20, jBackMax * 1000.0f / (2.0f * fsMeasured), (unsigned)jOvf, (unsigned)jIt, wifiGotIp ? 1 : 0);
+  jItMaxUs = 0; jGap20 = 0; jBackMax = 0; jIt = 0;
+}
+void wifiStatus() {
+  const char *st = !wifiOn ? "aus" : !wifiCredsOk() ? "kein Passwort" : wifiGotIp ? "verbunden" : "verbinde ...";
+  Serial.printf("\n[WLAN %s, SSID \"%s\", status=%d", st, wifiSsid.c_str(), (int)WiFi.status());
+  if (!wifiGotIp && wifiReason) Serial.printf(", Grund %u: %s", (unsigned)wifiReason, wifiReasonTxt(wifiReason));
+  if (wifiGotIp) Serial.printf(", IP %s, RSSI %d dBm, Browser %u, http://%s.local/ bzw. http://%s/", WiFi.localIP().toString().c_str(), (int)WiFi.RSSI(), (unsigned)webWs.count(), WIFI_HOSTNAME, WiFi.localIP().toString().c_str());
+  Serial.println("]");
+  printJitter();
+}
+// /wifi on|off|status|ssid <Name>|pass <Passwort>
+void wifiCmd(String a) {
+  a.trim();
+  // v46: nur Auftraege an wifiTask (Core 0), nichts Blockierendes hier
+  if (a == "on") { wifiOn = true; wifiPost(16 | (wifiUp ? 0 : 1)); }
+  else if (a == "off") { wifiOn = false; wifiPost(16 | 2); }
+  else if (a.startsWith("ssid ")) { String v = a.substring(5); v.trim(); portENTER_CRITICAL(&wifiMux); portEXIT_CRITICAL(&wifiMux);
+    wifiNewSsid = v; if (!(wifiReq & 8)) wifiNewPass = wifiPass; wifiPost(4 | 2 | (wifiOn ? 1 : 0)); Serial.println(F("\n[WLAN-Name wird gespeichert, verbinde neu]")); return; }
+  else if (a.startsWith("pass ")) { String v = a.substring(5); v.trim();
+    wifiNewPass = v; if (!(wifiReq & 4)) wifiNewSsid = wifiSsid; wifiPost(8 | 2 | (wifiOn ? 1 : 0));
+    Serial.printf("\n[WLAN-Passwort wird gespeichert (%u Zeichen), verbinde neu]\n", (unsigned)v.length()); return; }
+  wifiStatus();
+}
+
+static void webSendStatus(uint32_t now) {
+  char b[300];
+  float thrDb = stThr > 0 ? 20.0f * log10f(stThr) : 0, sqDbv = stSq > 0 ? 20.0f * log10f(stSq) : 0;
+  char hk = (handMode == 2) ? 'P' : (isHand() ? 'H' : (handMode == 0 && handIs == 0 ? 'A' : 'P'));
+  snprintf(b, sizeof(b), "S,%u,%d,%d,%.1f,%d,%.0f,%.0f,%.1f,%d,%.0f,%d,%.1f,%.1f,%c,%d,%d,%d,%d,%d,%d,%.0f",
+           (unsigned)now, (int)(1200.0f / unitMs + 0.5f), txWpm, unitMs, stMs, decHz, barPeakValid ? barPeakHz : 0.0f, barPeakDb,
+           barPeakValid ? 1 : 0, (float)lvlAmp, (int)lvlWarn, thrDb, sqDbv, hk, afcLocked ? 1 : 0, (int)WiFi.RSSI(),
+           (int)((int32_t)(lvlClipUntil - now) > 0), multiOn ? 1 : 0, tickerOn ? 1 : 0, STRIP_DOT_PX, thrMs);
+  size_t n = strlen(b);   // v48: Einstellungen fuer die Seitenleiste: thrmid, sq, stoch, stripauto, wifi
+  snprintf(b + n, sizeof(b) - n, ",%.2f,%.1f,%d,%d,%d", thrMid, sqDb, stochOn ? 1 : 0, stripAuto ? 1 : 0, wifiOn ? 1 : 0);
+  webWs.textAll(b);
+}
+static void webSendBars() {
+  String s; s.reserve(200); s = "B,"; s += BAR_F0; s += ','; s += BAR_STEP; s += ','; s += BAR_N;
+  for (int i = 0; i < BAR_N; i++) { s += ','; s += (int)(barDb[i] + 0.5f); }
+  for (int i = 0; i < BAR_N; i++) { s += ','; s += (int)(barHold[i] + 0.5f); }
+  webWs.textAll(s);
+}
+// Pegel-/Elementspalten (Raster ST_BASE ms) seit der letzten Sendung: je Spalte 2 Zeichen
+// ('0'+dB 0..60 bzw. '/' = keine Daten, '0'+Flags wie Streifen)
+static void webSendCols(uint32_t now) {
+  uint32_t c = now / ST_BASE - 1;
+  if (webStCol == 0 || c - webStCol > 400) webStCol = c - 100;
+  if (c <= webStCol) return;
+  String s; s.reserve(16 + 2 * (c - webStCol)); s = "L"; s += (unsigned)(webStCol + 1); s += ':';
+  for (uint32_t k = webStCol + 1; k <= c; k++) {
+    const volatile StCol &e = stRing[k % ST_N];
+    if (e.c != (uint16_t)k) { s += '/'; s += '0'; continue; }
+    float m = e.pk; int db = m > 1 ? (int)constrain(20.0f * log10f(m) + 0.5f, 0.0f, 60.0f) : 0;
+    s += (char)('0' + db); s += (char)('0' + (e.f & 7));
+  }
+  webStCol = c;
+  webWs.textAll(s);
+}
+static void webSendEvents() {
+  uint32_t h = wevHead;
+  if (h - wevTail > WEV_N) wevTail = h - WEV_N;
+  if (h == wevTail) return;
+  String s; s.reserve(400); char b[48];
+  while (wevTail != h) {
+    const volatile WebEv &e = wevR[wevTail % WEV_N]; wevTail++;
+    if (e.type == 1) snprintf(b, sizeof(b), "K1,%u\n", (unsigned)e.a);
+    else if (e.type == 2) snprintf(b, sizeof(b), "K0,%u,%u\n", (unsigned)e.a, (unsigned)e.b);
+    else { char t[7]; int i = 0; for (; i < 6 && e.s[i]; i++) t[i] = e.s[i]; t[i] = 0; snprintf(b, sizeof(b), "C,%u,%u,%s\n", (unsigned)e.a, (unsigned)e.b, t); }
+    s += b;
+    if (s.length() > 1200) { webWs.textAll(s); s = ""; }
+  }
+  if (s.length()) webWs.textAll(s);
+}
+// Textbereich als UTF-8 (Sonderzeichen über die Morsetabelle), nur bei Änderung
+static void webSendText(bool force) {
+  uint32_t sum = 2166136261u ^ (uint32_t)textLen;
+  for (int i = 0; i < textLen; i++) sum = (sum ^ (uint8_t)textBuf[i]) * 16777619u;
+  if (!force && sum == webTxtSum) return;
+  webTxtSum = sum;
+  String s; s.reserve(textLen + 32); s = "T"; s += cols; s += '|';
+  for (int i = 0; i < textLen; i++) {
+    uint8_t ch = (uint8_t)textBuf[i];
+    const char *u = ch >= 0x80 ? dispToTxt(ch) : nullptr;
+    if (u) s += u; else s += (char)ch;
+  }
+  webWs.textAll(s);
+}
+void execCmd(String line);
+void webLoop(uint32_t now) {
+  if (!wifiUp) return;
+  static uint32_t tSt = 0, tFast = 0, tClean = 0;
+  bool conn = WiFi.status() == WL_CONNECTED;
+  if (conn && !wifiGotIp) {
+    wifiGotIp = true; wifiIpShowUntil = now + 15000; drawHeaderNow();
+    MDNS.end(); if (MDNS.begin(WIFI_HOSTNAME)) MDNS.addService("http", "tcp", 80);
+    Serial.printf("\n[WLAN verbunden: http://%s.local/  IP %s]\n", WIFI_HOSTNAME, WiFi.localIP().toString().c_str());
+  } else if (!conn && wifiGotIp) {
+    wifiGotIp = false; wifiTryT = now; Serial.println(F("\n[WLAN getrennt - verbinde im Hintergrund neu]"));
+  }
+  // v46: Reconnect macht wifiTask (Core 0)
+  if (wifiIpShowUntil && (int32_t)(now - wifiIpShowUntil) > 0) { wifiIpShowUntil = 0; drawHeaderNow(); }
+  // Befehle vom Browser: wie seriell, Ausgabe zusätzlich an den Browser zurück
+  WebCmd w;
+  while (webCmdQ && xQueueReceive(webCmdQ, &w, 0) == pdTRUE) {
+    String out; String line(w.line); line.trim();
+    if (!line.length()) continue;
+    xSemaphoreTake(audioMtx, portMAX_DELAY);
+    Serial.cap = &out;
+    Serial.printf("\n[Web] %s\n", line.startsWith("/wifi pass") ? "/wifi pass ***" : line.c_str());
+    execCmd(line);
+    Serial.cap = nullptr;
+    xSemaphoreGive(audioMtx);
+    if (out.length() > 3000) out = out.substring(0, 3000);
+    webWs.text(w.client, String("R") + out);
+  }
+  if (!conn) return;
+  if (now - tClean > 1000) { tClean = now; webWs.cleanupClients(); }
+  if (!webWs.count()) { wevTail = wevHead; webStCol = 0; return; }
+  if (now - tFast >= 50) { tFast = now; webSendEvents(); webSendCols(now); webSendText(false); }
+  if (now - tSt >= 200) { tSt = now; webSendStatus(now); if (barOn) webSendBars(); }
+}
+
+// v48: Webseite (Design C) gzip-komprimiert in web_page.h
+
+
 // ==========================================================================
 //  SETUP / LOOP
 // ==========================================================================
@@ -2949,26 +3304,30 @@ void setup() {
   monBegin(); monSetFreqs(decHz);
   uiQ = xQueueCreate(64, sizeof(UiOp));
   audioMtx = xSemaphoreCreateMutex();
-  xTaskCreatePinnedToCore(audioTask, "audio", 8192, nullptr, 5, nullptr, AUDIO_CORE);
+  xTaskCreatePinnedToCore(audioTask, "audio", 8192, nullptr, 20, &audioTaskH, AUDIO_CORE);   // v47: Prio 20 > lwIP tcpip (18, ohne Kernbindung)   // v45: Core 1, Prio 5 > loop (1)
 #if AUDIO_SELFTEST
   Serial.println(F("*** AUDIO-SELBSTTEST: ADC an GPIO 32, Generator 700 Hz auf GPIO 32 ***"));
 #endif
   Serial.printf("Audio-Eingang GPIO34: %s\n", audioOk ? "aktiv (20 kHz, Goertzel)" : "FEHLER beim ADC-Start");
   delay(200);
   printHelp();
+  wifiSetup();   // v45: WLAN im Hintergrund (blockiert nicht)
 }
 
 // Audio-Task (Core 0): ADC lesen, Goertzel, Decoder. Kein Display-Zugriff.
 void audioTask(void *) {
+  uint32_t lastIt = 0;
   for (;;) {
     xSemaphoreTake(audioMtx, portMAX_DELAY);
     uint32_t t0us = micros();
+    if (lastIt) { uint32_t g = t0us - lastIt; if (g > jItMaxUs) jItMaxUs = g; if (g > 20000) jGap20++; }   // v45 Jitter
+    lastIt = t0us; jIt++;
     uint32_t now = millis();
     audioLoop(now);
 #if AUDIO_SELFTEST
     selftestLoop(now);
 #endif
-    if (multiOn) multiDecoderLoop(now); else decoderLoop(now);
+    if (multiOn) multiDecoderLoop(aClkEnd); else decoderLoop(aClkEnd);   // v47: Decoder-Zeit = Abtast-Uhr
     uint32_t dt = micros() - t0us;
     if (dt > loopMaxUs) loopMaxUs = dt;
     c0Account(dt, now);               // Laufzeit Audiopfad
@@ -3018,8 +3377,15 @@ void lvlWarnLoop(uint32_t now) {
 }
 
 
+// v50: Display neu initialisieren und komplett neu zeichnen (nur aus loop)
+volatile bool tftReq = false; uint32_t tftLast = 0; bool tftIpDone = false;
+void tftReinit() { setupDisplay(); tftLast = millis(); }
 void loop() {
   uint32_t now = millis();
+  if (tftReq || (!tftIpDone && wifiEvConn && now > 6000) || now - tftLast > TFT_REFRESH_MS) {
+    if (wifiEvConn) tftIpDone = true;
+    tftReq = false; tftReinit(); now = millis();
+  }
   uint32_t tb = micros();
   uiDrain(15);
   barDraw(now);
@@ -3032,5 +3398,6 @@ void loop() {
   funcButtonLoop(now);
   serialLoop();
   xSemaphoreGive(audioMtx);
+  webLoop(now);   // v45: WLAN/Webseite (nimmt die Sperre nur fuer Web-Befehle)
   delay(1);
 }

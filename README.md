@@ -66,3 +66,34 @@ arduino-cli upload  --fqbn esp32:esp32:esp32 -p <PORT> morse_esp32
 
 - Pegel: Die Kopfzeile meldet „PEGEL ZU NIEDRIG/HOCH“, dann die Lautstärke am Empfänger anpassen.
 - Bei falschen Farben, gespiegelter Schrift oder Rand die Abschnitte 1–5 in `display_config.h` prüfen.
+
+## WLAN und Webseite (ab v45)
+
+Der Decoder verbindet sich mit dem WLAN und zeigt unter `http://morsedecoder.local/` live Text, Laufband, Zeichenzeile, Frequenzband, WPM und Pegel. Ein Eingabefeld schickt Befehle wie über die serielle Schnittstelle.
+
+Die Zugangsdaten stehen in `morse_esp32/wifi_config.h` (nicht im Repository, siehe `.gitignore`). Vorlage: `morse_esp32/wifi_config.example.h` nach `wifi_config.h` kopieren und ausfüllen:
+
+```c
+#define WIFI_SSID     "MeinWLAN"
+#define WIFI_PASS     "MeinPasswort"
+#define WIFI_HOSTNAME "morsedecoder"
+```
+
+Ohne diese Datei läuft der Decoder ohne WLAN. Alternativ: `/wifi ssid NAME` und `/wifi pass PASSWORT` (im ESP32 gespeichert). Zusätzliche Bibliotheken: „ESP Async WebServer“ und „Async TCP“ (ESP32Async).
+
+### Webseite (Design C, v48–v51)
+
+Modernes dunkles Layout mit Statuskacheln (WPM, Modus, Frequenz, Pegel, WLAN), Text, Laufband mit Schwelle/Sperre und dekodierten Zeichen, Spektrum sowie einer Seitenleiste (⚙) mit Reglern für Schwelle (`/thrmid`), Sperre (`/sq`), Schaltern (`/stoch`, `/stripauto`, WLAN) und Befehlseingabe. Daten kommen per WebSocket `/ws`.
+
+Quelle: `web/page.html`. Nach Änderungen `cd web && python3 mkh.py` ausführen; das erzeugt `morse_esp32/web_page.h` (gzip).
+
+Kompilieren mit AsyncTCP auf Core 0 (Audio läuft auf Core 1):
+
+```
+arduino-cli compile --fqbn esp32:esp32:esp32 --build-property "compiler.cpp.extra_flags=-DCONFIG_ASYNC_TCP_RUNNING_CORE=0" morse_esp32
+```
+
+### Stabilität
+
+- v47: Zeitstempel der Flanken aus dem Abtastzähler, Audio-Task Priorität 20 auf Core 1, damit WLAN die Dekodierung nicht stört.
+- v50: Display-Hardware-Reset beim Start, WLAN startet erst nach 4 s mit reduzierter Sendeleistung (15 dBm), Display-SPI 20 MHz, Display wird nach WLAN-Verbindung und alle 60 s neu initialisiert (`TFT_REFRESH_MS` in `display_config.h`), manuell mit `/tft`.

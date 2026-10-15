@@ -32,7 +32,7 @@
 // --------------------------------------------------------------------------
 //  2) SPI-Takt
 // --------------------------------------------------------------------------
-#define TFT_SPI_HZ  27000000UL   // 27 MHz; bei Bildfehlern z. B. 20000000UL
+#define TFT_SPI_HZ  20000000UL   // v50: 20 MHz (vorher 27), robuster bei WLAN-Stoerungen
 
 // --------------------------------------------------------------------------
 //  3) Ausrichtung, Spiegelung, Farben des Panels
@@ -104,3 +104,7 @@
 #define C_HOLD    0xF800      // Peak-Hold-Marke
 #define C_DICT    RB(0x07FF)  // cyan      – per Wörterbuch ergänztes Wort
 #define C_GRID    0x4208      // dunkelgrau – Raster/Mittenmarke
+// v50: Display alle 60 s neu initialisieren + neu zeichnen (Schutz gegen weisses Display nach Controller-Reset)
+#ifndef TFT_REFRESH_MS
+#define TFT_REFRESH_MS 60000UL
+#endif

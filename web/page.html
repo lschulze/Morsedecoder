@@ -1,0 +1,115 @@
+<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Morsedecoder</title><style>*{box-sizing:border-box}body{margin:0;--ts:34px;--sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;--mono:ui-monospace,"Cascadia Mono",Consolas,"DejaVu Sans Mono",monospace;--bg:#0b1424;--fg:#eef4fb;--mut:#93a3b8;--grid:#22324a;--c1:#3ee08a;--c2:#ffd166;--c3:#ff6b6b;--bar:#15553a;font:15px/1.4 var(--sans);color:var(--fg);min-height:100vh;background:radial-gradient(1200px 600px at 20% -10%,#1a2d4d,transparent),#0b1424}
+header{display:flex;align-items:center;gap:14px;padding:10px 18px;flex-wrap:wrap}.brand{display:flex;align-items:center;gap:8px;font-size:17px;margin-right:auto}.brand small{color:var(--mut);font-size:12px}
+.dot{width:11px;height:11px;border-radius:50%;background:var(--grid)}.dot.on{background:var(--c1);box-shadow:0 0 8px var(--c1)}
+.tiles{display:flex;gap:8px;flex-wrap:wrap}.tile{padding:6px 12px;min-width:84px;display:flex;flex-direction:column}.tile small{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--mut)}.tile span{font-size:19px;font-weight:600;font-variant-numeric:tabular-nums;color:var(--c1)}.tile i{font-style:normal}
+.meter{height:4px;background:var(--grid);border-radius:2px;margin-top:3px;overflow:hidden}.meter div{height:100%;background:var(--c1);width:0;transition:width .15s}
+.ts{display:flex;align-items:center;gap:6px;color:var(--mut);font-size:13px}.ts :last-child{font-size:20px}
+button{font:inherit;color:inherit;cursor:pointer;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.14);border-radius:10px}#tg{font-size:20px;width:40px;height:40px;border-radius:12px}
+#warn{display:none;margin:0 18px 10px;padding:8px 14px;border-radius:12px;font-weight:600;color:#1b1200;background:var(--c2)}#warn.hi{background:var(--c3);color:#fff}
+main{display:grid;gap:14px;padding:4px 18px 18px;transition:margin .25s}.card{padding:12px 16px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.09);border-radius:16px;backdrop-filter:blur(10px)}.tile{background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.09);border-radius:12px}
+h2{margin:0 0 8px;font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--mut);font-weight:600;display:flex;align-items:center;gap:10px}h2 em{font-style:normal;font-weight:400;text-transform:none;letter-spacing:0}h2 button{margin-left:auto;font-size:12px;padding:3px 10px}
+#text{font:500 var(--ts)/1.35 var(--mono);height:calc(var(--ts)*1.35*3);overflow:hidden;display:flex;flex-direction:column-reverse;white-space:pre-wrap;word-break:break-all;letter-spacing:.04em;color:#fff}
+canvas{width:100%;display:block}#strip{height:240px}#spec{height:140px}
+aside{position:fixed;top:0;right:0;bottom:0;width:320px;max-width:90vw;padding:16px 20px;transform:translateX(105%);transition:transform .25s;display:flex;flex-direction:column;gap:16px;overflow:auto;z-index:5;background:rgba(14,26,46,.92);backdrop-filter:blur(14px);border-left:1px solid rgba(255,255,255,.1)}.open aside{transform:none}@media(min-width:1100px){.open main,.open header,.open #warn{margin-right:320px}}
+aside h2{font-size:14px}aside label{display:flex;flex-wrap:wrap;justify-content:space-between;gap:6px}input[type=range]{accent-color:var(--c1)}aside input[type=range]{width:100%}output{font-variant-numeric:tabular-nums;color:var(--c1);font-weight:600}
+.sw{justify-content:flex-start!important;align-items:center;gap:10px!important;font-family:var(--mono);cursor:pointer}.sw input{display:none}.sw span{width:40px;height:22px;border-radius:11px;background:var(--grid);position:relative;transition:.2s}.sw span:after{content:"";position:absolute;left:3px;top:3px;width:16px;height:16px;border-radius:50%;background:var(--fg);transition:.2s}.sw input:checked+span{background:var(--c1)}.sw input:checked+span:after{left:21px;background:var(--bg)}.sw b{font-family:var(--sans);font-weight:400;color:var(--mut);font-size:13px;margin-left:auto}
+.wl{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--mut)}.wl button{margin-left:auto;white-space:nowrap;font-size:12px;padding:3px 10px}
+form{display:flex;gap:6px}#cmd{flex:1;min-width:0;font:14px var(--mono);padding:8px 10px;color:inherit;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.14);border-radius:10px}form button{padding:8px 12px;background:var(--c1);color:#062414;border:0;font-weight:600}
+pre{margin:0;font:12px/1.35 var(--mono);color:var(--mut);white-space:pre-wrap;flex:1;min-height:120px;overflow:auto;background:rgba(0,0,0,.2);border-radius:10px;padding:8px}
+@media(max-width:700px){header{padding:8px 10px}main{padding:4px 10px 10px}.tile{min-width:70px}}</style></head><body><header><div class="brand"><span class="dot" id="k1"></span><b>Morsedecoder</b><small id="con">verbinde …</small></div>
+<div class="tiles">
+<div class="tile"><small>WPM</small><span id="wpm">--</span></div>
+<div class="tile"><small>Modus</small><span id="mode">--</span></div>
+<div class="tile"><small>Frequenz</small><span><i id="freq">---</i> Hz</span></div>
+<div class="tile"><small>Peak</small><span id="pk">---</span></div>
+<div class="tile"><small>Pegel</small><span><i id="lvl">--</i> dB</span><div class="meter"><div id="mtr"></div></div></div>
+<div class="tile"><small>WLAN</small><span><i id="rssi">--</i> dBm</span></div>
+</div>
+<label class="ts" title="Textgröße">A<input type="range" id="tsz" min="18" max="64" value="34">A</label>
+<button id="tg" aria-label="Einstellungen">&#9881;</button></header>
+<div id="warn"></div>
+<main>
+<section class="card"><h2>Text <button id="clr">Löschen</button></h2><div id="text"></div></section>
+<section class="card"><h2>Laufband <em id="sti">-- ms/px</em></h2><canvas id="strip"></canvas></section>
+<section class="card"><h2>Spektrum <em id="spi"></em></h2><canvas id="spec"></canvas></section>
+</main>
+<aside id="side"><h2>Einstellungen <button id="cl">&times;</button></h2>
+<label>Schwelle <output id="o1">--</output><input type="range" id="thr" min="0.1" max="0.9" step="0.05" value="0.5"></label>
+<label>Rauschsperre <output id="o2">--</output><input type="range" id="sq" min="0" max="10" step="0.5" value="4"></label>
+<label class="sw"><input type="checkbox" id="stoch"><span></span>/stoch<b>Zeichenpausen</b></label>
+<label class="sw"><input type="checkbox" id="sauto"><span></span>/stripauto<b>Laufband-Tempo</b></label>
+<div class="wl"><span class="dot" id="wd"></span><span id="wst">WLAN: --</span><button id="wb">/wifi status</button></div>
+<form id="cf"><input id="cmd" placeholder="Befehl, z.B. /stat oder /help" autocomplete="off"><button>Senden</button></form>
+<pre id="log"></pre></aside><script>
+const $=i=>document.getElementById(i),css=getComputedStyle(document.body),V=n=>css.getPropertyValue(n).trim();
+const C={c1:V('--c1'),c2:V('--c2'),c3:V('--c3'),g:V('--grid'),f:V('--fg'),m:V('--mut'),b:V('--bar'),bg:V('--bg'),mono:V('--mono'),sans:V('--sans')};
+let ws,off=null,lastMsg=0,stMs=12,thrMs=100,thrDb=0,sqLine=0,decHz=0,cols={},labs=[],bars=null,keyOn=false,lastDb=0,hold={};
+// Textgroesse
+let ts=parseInt(localStorage.ts||'34');const setTs=v=>{document.body.style.setProperty('--ts',v+'px');$('tsz').value=v};setTs(ts);
+$('tsz').oninput=e=>{ts=+e.target.value;localStorage.ts=ts;setTs(ts)};
+$('tg').onclick=$('cl').onclick=()=>document.body.classList.toggle('open');
+function log(t){const l=$('log');l.textContent=(l.textContent+t).slice(-6000);l.scrollTop=l.scrollHeight}
+function send(c){if(!c)return;if(ws&&ws.readyState==1){ws.send(c);log('\n> '+c)}else log('\n(nicht verbunden) '+c)}
+$('cf').onsubmit=e=>{e.preventDefault();send($('cmd').value.trim());$('cmd').value=''};
+$('clr').onclick=()=>send('/clear');$('wb').onclick=()=>send('/wifi status');
+// Regler/Schalter: echte Werte aus S, waehrend Bedienung nicht ueberschreiben
+const fmt=v=>(+v).toFixed(2).replace('.',','),fdb=v=>(+v).toFixed(1).replace('.',',').replace(',0','')+' dB';
+function ctl(id,o,f,cmd){const e=$(id);e.oninput=()=>{hold[id]=performance.now()+1e9;if(o)$(o).value=f(e.value)};
+  e.onchange=()=>{hold[id]=performance.now()+2500;send(cmd(e))}}
+ctl('thr','o1',fmt,e=>'/thrmid '+e.value);ctl('sq','o2',fdb,e=>'/sq '+e.value);
+ctl('stoch',0,0,e=>'/stoch '+(e.checked?'on':'off'));ctl('sauto',0,0,e=>'/stripauto '+(e.checked?'on':'off'));
+function setCtl(id,v,o,f){if((hold[id]||0)>performance.now())return;const e=$(id);if(e.type=='checkbox')e.checked=!!v;else{e.value=v;if(o)$(o).value=f(v)}}
+function espNow(){return performance.now()+(off||0)}
+function sync(t){const o=t-performance.now();if(off===null||o>off||off-o>500)off=o;else off+=(o-off)*0.02}
+function onMsg(m){lastMsg=performance.now();const c=m[0];
+  if(c=='S'){const a=m.split(',');sync(+a[1]);$('wpm').textContent=a[2];stMs=+a[5]||12;decHz=+a[6];$('freq').textContent=Math.round(decHz);
+    $('pk').textContent=+a[9]?Math.round(+a[7])+' Hz':'---';$('lvl').textContent=Math.round(+a[8]||0);$('mtr').style.width=Math.min(100,Math.max(0,(+a[8]||0)/60*100))+'%';
+    thrDb=+a[12];sqLine=+a[13];$('mode').textContent=a[14]=='H'?'Hand':a[14]=='P'?'Paddle':'Auto';
+    $('rssi').textContent=a[16];thrMs=+a[21]||100;$('sti').textContent=stMs*2+' ms/px · '+(480*stMs/1000).toFixed(1).replace('.',',')+' s';
+    const w=+a[11],W=$('warn');W.style.display=w?'block':'none';W.className=w==2?'hi':'';W.textContent=w==2?'Pegel zu hoch – Eingang übersteuert, Lautstärke verringern':'Pegel zu niedrig – Lautstärke am Empfänger erhöhen';
+    if(a.length>22){setCtl('thr',+a[22],'o1',fmt);setCtl('sq',+a[23],'o2',fdb);setCtl('stoch',+a[24]);setCtl('sauto',+a[25])}
+    $('con').textContent='verbunden';$('wd').className='dot on';$('wst').textContent='WLAN verbunden, '+a[16]+' dBm, '+location.host}
+  else if(c=='L'){const i=m.indexOf(':');let k=+m.substring(1,i);
+    for(let p=i+1;p+1<m.length;p+=2,k++){const d=m.charCodeAt(p);if(d!=47){cols[k]=[d-48,m.charCodeAt(p+1)-48];lastDb=d-48}}}
+  else if(c=='T'){const i=m.indexOf('|'),t=m.substring(i+1),x=$('text');if(x.dataset.v!=t){x.dataset.v=t;x.textContent=t}}
+  else if(c=='B'){bars=m.split(',').slice(1).map(Number);$('spi').textContent=bars[0]+'–'+(bars[0]+bars[1]*(bars[2]-1))+' Hz'}
+  else if(c=='R'){log(m.substring(1).replace(/^\n+/,'\n'))}
+  else if(c=='K'||c=='C'){for(const l of m.split('\n')){if(l[0]=='C'){const a=l.split(',');labs.push([+a[1],+a[2],a.slice(3).join(',')]);if(labs.length>240)labs.shift()}
+    else if(l.startsWith('K1'))keyOn=true;else if(l.startsWith('K0'))keyOn=false}}}
+function conn(){ws=new WebSocket('ws://'+location.host+'/ws');ws.onmessage=e=>onMsg(e.data);
+  ws.onclose=()=>{$('con').textContent='getrennt – verbinde neu';$('wd').className='dot';$('wst').textContent='WLAN: keine Verbindung';setTimeout(conn,2000)}}
+conn();
+const cv=n=>{const c=$(n),r=c.getBoundingClientRect(),p=devicePixelRatio||1;if(c.width!=Math.round(r.width*p)||c.height!=Math.round(r.height*p)){c.width=Math.round(r.width*p);c.height=Math.round(r.height*p)}const x=c.getContext('2d');x.setTransform(p,0,0,p,0,0);return[x,r.width,r.height]};
+function tag(x,t,X,y,col){x.font='16px '+C.sans;const w=x.measureText(t).width+10;x.fillStyle='rgba(11,20,36,.88)';x.strokeStyle=col;x.lineWidth=1;x.beginPath();x.roundRect(X,y-12,w,24,6);x.fill();x.stroke();x.fillStyle=col;x.textAlign='left';x.textBaseline='middle';x.fillText(t,X+5,y+.5)}
+function strip(){const[x,w,h]=cv('strip');x.clearRect(0,0,w,h);const top=6,eb=h-62,ph=eb-top-8,Y=d=>top+ph*(1-Math.max(0,Math.min(1,(d-10)/50)));
+  const span=480*stMs,now=espNow()-30,t0=now-span,px=w/span;
+  x.strokeStyle=C.g;x.lineWidth=1;x.beginPath();for(const d of [20,30,40,50]){const y=Math.round(Y(d))+.5;x.moveTo(0,y);x.lineTo(w,y)}x.stroke();
+  const k0=Math.floor(t0/4),k1=Math.floor(now/4);
+  // Elementbalken
+  let run=-1;for(let k=k0;k<=k1+1;k++){const e=cols[k],on=e&&(e[1]&2)&&k<=k1;if(on&&run<0)run=k;
+    if(!on&&run>=0){const len=(k-run)*4;x.fillStyle=len>thrMs?C.c1:'#7fb8a0';x.beginPath();x.roundRect((run*4-t0)*px,eb+4,Math.max(1.5,len*px),7,3);x.fill();run=-1}}
+  // Pegelkurve mit Flaeche
+  const g=x.createLinearGradient(0,top,0,eb);g.addColorStop(0,'rgba(62,224,138,.35)');g.addColorStop(1,'rgba(62,224,138,0)');
+  x.beginPath();let st=0,lx=0;for(let k=k0;k<=k1;k++){const e=cols[k];if(!e)continue;const X=(k*4+2-t0)*px,y=Y(e[0]);if(!st){x.moveTo(X,eb);x.lineTo(X,y);st=X}else x.lineTo(X,y);lx=X}
+  if(st){x.lineTo(lx,eb);x.closePath();x.fillStyle=g;x.fill()}
+  x.strokeStyle=C.c1;x.lineWidth=1.5;x.lineJoin='round';x.beginPath();st=0;for(let k=k0;k<=k1;k++){const e=cols[k];if(!e){st=0;continue}const X=(k*4+2-t0)*px,y=Y(e[0]);st?x.lineTo(X,y):x.moveTo(X,y);st=1}x.stroke();
+  // Schwelle/Rauschsperre
+  x.setLineDash([5,4]);x.lineWidth=1;if(sqLine>0){x.strokeStyle=C.c3;x.beginPath();x.moveTo(0,Y(sqLine));x.lineTo(w,Y(sqLine));x.stroke()}
+  if(thrDb>0){x.strokeStyle=C.c2;x.beginPath();x.moveTo(0,Y(thrDb));x.lineTo(w,Y(thrDb));x.stroke()}x.setLineDash([]);
+  if(thrDb>0)tag(x,'Schwelle '+Math.round(thrDb)+' dB',4,Y(thrDb),C.c2);
+  if(sqLine>0&&Math.abs(Y(sqLine)-Y(thrDb))>17)tag(x,'Sperre '+Math.round(sqLine)+' dB',4,Y(sqLine),C.c3);
+  // Zeichen
+  x.fillStyle=C.f;x.font='600 23px '+C.mono;x.textAlign='center';x.textBaseline='alphabetic';let last=1e9;
+  for(let i=labs.length-1;i>=0;i--){const L=labs[i];let xm=((L[0]+L[1])/2-t0)*px;const tw=x.measureText(L[2]).width;if(xm+tw/2>last)xm=last-tw/2;if(xm+tw/2<0)break;if(xm-tw/2<w)x.fillText(L[2],xm,h-12);last=xm-tw/2-3}
+  for(const k in cols)if(k<k0-100)delete cols[k]}
+function spec(){const[x,w,h]=cv('spec');x.clearRect(0,0,w,h);if(!bars)return;const f0=bars[0],fs=bars[1],B=bars[2],bw=w/B,ph=h-20,f1=f0+fs*B;
+  x.strokeStyle=C.g;x.fillStyle=C.m;x.font='11px '+C.sans;x.textAlign='center';x.textBaseline='alphabetic';x.lineWidth=1;x.beginPath();
+  for(let f=Math.ceil(f0/100)*100;f<f1;f+=100){const X=Math.round(((f-f0)/fs+.5)*bw)+.5;x.moveTo(X,0);x.lineTo(X,ph);x.fillText(f,Math.min(Math.max(X,14),w-16),h-4)}x.stroke();
+  const g=x.createLinearGradient(0,ph,0,0);g.addColorStop(0,C.b);g.addColorStop(1,C.c1);x.fillStyle=g;
+  for(let i=0;i<B;i++){const v=Math.max(0,Math.min(1,bars[3+i]/60))*ph;x.beginPath();x.roundRect(i*bw+bw*.12,ph-v,bw*.76,v,[2,2,0,0]);x.fill()}
+  x.fillStyle=C.c2;for(let i=0;i<B;i++){const v=Math.max(0,Math.min(1,bars[3+B+i]/60))*ph;x.fillRect(i*bw+bw*.12,ph-v-1,bw*.76,2)}
+  if(decHz){const X=((decHz-f0)/fs+.5)*bw;x.strokeStyle='rgba(255,255,255,.7)';x.setLineDash([3,3]);x.beginPath();x.moveTo(X,0);x.lineTo(X,ph);x.stroke();x.setLineDash([])}}
+function loop(){strip();spec();$('k1').className='dot'+(keyOn?' on':'');if(lastMsg&&performance.now()-lastMsg>3000)$('con').textContent='keine Daten';requestAnimationFrame(loop)}
+if(!CanvasRenderingContext2D.prototype.roundRect)CanvasRenderingContext2D.prototype.roundRect=function(a,b,c,d){this.rect(a,b,c,d)};
+loop();if(location.hash=='#open')document.body.classList.add('open');
+</script></body></html>

@@ -1,0 +1,4 @@
+wifi_config.h
+morse_esp32/wifi_config.h
+*.bin
+build/

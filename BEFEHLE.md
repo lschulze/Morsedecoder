@@ -69,3 +69,8 @@ Befehle im seriellen Monitor eingeben (115200 Baud, Zeilenende „Neue Zeile“)
 - Morsetaste an GPIO 27 (gegen GND)
 - Funktionstaste an GPIO 33: kurz (< 1 s) = Text löschen, lang (≥ 1 s) = dekodierten Text als Morse wiederholen (Echo)
 - Ein Druck auf eine der Tasten bricht eine laufende Geber-Ausgabe ab.
+
+| `/wifi on\|off\|status` | WLAN und Webseite ein/aus, Status mit IP (ab v45) |
+| `/wifi ssid NAME` / `/wifi pass PASSWORT` | WLAN-Zugang im ESP32 speichern (überschreibt wifi_config.h) |
+| `/stat` / `/stat reset` | Statistik inkl. Audio-Jitter (itMax, adcOvf) / zurücksetzen (ab v46) |
+| `/tft` | Display neu initialisieren und neu zeichnen (ab v50) |
